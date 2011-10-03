@@ -1,0 +1,224 @@
+#!/usr/bin/python
+"""
+github-pull-request-rss CACHE.json USER/PROJECT > out.rss
+
+Generate an RSS feed from Github Pull Requests and all comments in
+them.
+
+"""
+import os
+import sys
+import re
+import datetime
+import urllib2
+import json
+
+import pytz
+
+API_URL_BASE = "http://github.com/api/v2/json/"
+
+def parse_time(s):
+    """Parse a time string and convert to UTC"""
+
+    # US time format
+    m = re.match(r'^([0-9]+)/([0-9]+)/([0-9]+)\s*([0-9]+:[0-9]+:[0-9]+)\s*([+-][0-9][0-9][0-9][0-9])\s*$', s)
+    if m:
+        s = "%s-%s-%sT%s%s:%s" % (m.group(1), m.group(2), m.group(3),
+                                  m.group(4), m.group(5)[:-2], m.group(5)[-2:])
+
+    # UTC time format
+    if s.endswith('Z'):
+        return datetime.datetime.strptime(s, '%Y-%m-%dT%H:%M:%SZ')
+
+    # TZ time format
+    m = re.search(r'([+-])([0-9]+):([0-9]+)$', s)
+    if m:
+        t = datetime.datetime.strptime(s[:m.start()], '%Y-%m-%dT%H:%M:%S')
+        dt = datetime.timedelta(hours=int(m.group(2)),
+                                minutes=int(m.group(3)))
+        if m.group(1) == '+':
+            t += dt
+        else:
+            t -= dt
+        return t
+
+    # Unknown
+    raise ValueError("Failed to parse date %r" % s)
+
+class attrdict(dict):
+    __getattr__ = dict.__getitem__
+    __setattr__ = dict.__setitem__
+
+class Comment(object):
+    def __init__(self, user, body, timestamp, link=None, commit=None,
+                 request_number=None):
+        self.user = user
+        self.body = body
+        self.commit = commit
+        self.link = link
+        self.timestamp = timestamp
+        self.request_number = int(request_number)
+
+    def __repr__(self):
+        if self.commit:
+            return "<Comment %s @ %-3d '%s': '%s' (%s)>" % (
+                self.timestamp.strftime('%Y-%m-%d'),
+                self.request_number,
+                self.user,
+                re.sub(r'[^a-zA-Z0-9: _.*-]', ' ', self.body[:20]),
+                self.commit[:6]
+                )
+        else:
+            return "<Comment %s @ %-3d '%s': '%s'>" % (
+                self.timestamp.strftime('%Y-%m-%d'),
+                self.request_number,
+                self.user,
+                re.sub(r'[^a-zA-Z0-9: _.*-]', ' ', self.body[:20]),
+                )
+
+class GithubPulls(object):
+    """
+    Fetch and cache Github pull request data
+    """
+
+    def __init__(self, user, project, cachefile):
+        self._requests = {}
+        self._cachefile = cachefile
+        self.user = user
+        self.project = project
+
+        if os.path.isfile(cachefile):
+            self.load_cache()
+
+    def load_cache(self):
+        """Load data from cache file"""
+        with open(self._cachefile, 'rb') as f:
+            d = json.load(f)
+            self._requests = {}
+            for k, v in d['requests'].items():
+                self._requests[int(k)] = v
+
+    def save_cache(self):
+        """Save data to cache file"""
+        tmp_file = self._cachefile + '.new'
+        with open(tmp_file, 'wb') as f:
+            json.dump(dict(requests=self._requests), f)
+        # atomic replace
+        os.rename(tmp_file, self._cachefile)
+
+    def update(self):
+        """Update local state by fetching data from github.com"""
+        url = API_URL_BASE + "pulls/%s/%s/open" % (self.user, self.project)
+        print >> sys.stderr, "Fetch:", url
+        f = urllib2.urlopen(url)
+        try:
+            open_data = json.load(f)
+        finally:
+            f.close()
+
+        url = API_URL_BASE + "pulls/%s/%s/closed" % (self.user, self.project)
+        print >> sys.stderr, "Fetch:", url
+        f = urllib2.urlopen(url)
+        try:
+            closed_data = json.load(f)
+        finally:
+            f.close()
+
+        data = open_data
+        data['pulls'].extend(closed_data['pulls'])
+        self._update_from_data(data)
+
+    def _update_from_data(self, data):
+        # Check which pull requests need updating
+        new_list = {}
+        need_update = set()
+        for request in data['pulls']:
+            old_request = self._requests.get(request['number'])
+
+            if old_request is None:
+                need_update.add(request['number'])
+            else:
+                t_new = parse_time(request['updated_at'])
+                t_old = parse_time(old_request['updated_at'])
+                if t_new != t_old:
+                    need_update.add(request['number'])
+
+            new_list[request['number']] = request
+
+        # Fetch updated data, when needed
+        for number, request in new_list.items():
+            if number not in need_update:
+                req = dict(self._requests[number])
+                req.update(request)
+                request.update(req)
+            else:
+                self._fetch_request(number, request)
+
+        # Done
+        self._requests = new_list
+
+    def _fetch_request(self, number, request):
+        url = API_URL_BASE + "pulls/%s/%s/%d" % (self.user, self.project,
+                                                 number)
+        print >> sys.stderr, "Fetch:", url
+        f = urllib2.urlopen(url)
+        try:
+            data = json.load(f)
+        finally:
+            f.close()
+        request.update(data['pull'])
+
+    @property
+    def comments(self):
+        items = []
+
+        def get_user(item):
+            if not item['user']:
+                return "Nobody"
+            return item['user'].get('name') or item['user']['login']
+
+        for request in self._requests.values():
+            item = Comment(user=get_user(request),
+                           body=request['body'],
+                           link=request['html_url'],
+                           timestamp=parse_time(request['created_at']),
+                           request_number=request['number'],
+                           )
+            items.append(item)
+
+            for entry in request['discussion']:
+                if entry['type'].lower() == 'commit':
+                    item = Comment(user=get_user(entry),
+                                   body=entry['message'],
+                                   timestamp=parse_time(entry['committed_date']),
+                                   commit=entry['id'],
+                                   request_number=request['number'],
+                                   )
+                    items.append(item)
+                elif entry['type'].lower() == 'issuecomment':
+                    item = Comment(user=get_user(entry),
+                                   body=entry['body'],
+                                   timestamp=parse_time(entry['created_at']),
+                                   request_number=request['number'],
+                                   )
+                    items.append(item)
+                elif entry['type'].lower() == 'pullrequestreviewcomment':
+                    item = Comment(user=get_user(entry),
+                                   body=entry['body'],
+                                   timestamp=parse_time(entry['created_at']),
+                                   request_number=request['number'],
+                                   )
+                    items.append(item)
+                elif entry['type'].lower() == 'commitcomment':
+                    item = Comment(user=get_user(entry),
+                                   body=entry['body'],
+                                   timestamp=parse_time(entry['created_at']),
+                                   request_number=request['number'],
+                                   )
+                    items.append(item)
+                else:
+                    raise ValueError("Unknown item type %r" % entry['type'])
+
+        items.sort(key=lambda x: x.timestamp)
+
+        return items
