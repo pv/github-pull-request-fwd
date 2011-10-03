@@ -12,8 +12,10 @@ import re
 import datetime
 import urllib2
 import json
+import cgi
 
-import pytz
+import locale
+locale.setlocale(locale.LC_ALL, 'C')
 
 API_URL_BASE = "http://github.com/api/v2/json/"
 
@@ -37,9 +39,9 @@ def parse_time(s):
         dt = datetime.timedelta(hours=int(m.group(2)),
                                 minutes=int(m.group(3)))
         if m.group(1) == '+':
-            t += dt
-        else:
             t -= dt
+        else:
+            t += dt
         return t
 
     # Unknown
@@ -188,10 +190,17 @@ class GithubPulls(object):
 
             for entry in request['discussion']:
                 if entry['type'].lower() == 'commit':
+                    repo = request['head']['repository']
+                    if repo is None:
+                        repo = request['base']['repository']
+                    link = u"%s/commit/%s" % (
+                        repo['url'],
+                        entry['id'])
                     item = Comment(user=get_user(entry),
                                    body=entry['message'],
                                    timestamp=parse_time(entry['committed_date']),
                                    commit=entry['id'],
+                                   link=link,
                                    request_number=request['number'],
                                    )
                     items.append(item)
@@ -202,18 +211,27 @@ class GithubPulls(object):
                                    request_number=request['number'],
                                    )
                     items.append(item)
-                elif entry['type'].lower() == 'pullrequestreviewcomment':
+                elif entry['type'].lower() in ('pullrequestreviewcomment',
+                                               'commitcomment'):
+                    repo = request['head']['repository']
+                    if repo is None:
+                        repo = request['base']['repository']
+                    if 'position' in entry:
+                        link = u"%s/commit/%s#%s-P%s" % (
+                            repo['url'],
+                            entry['commit_id'],
+                            entry['path'],
+                            entry['position'])
+                    else:
+                        link = u"%s/commit/%s#%s" % (
+                            repo['url'],
+                            entry['commit_id'],
+                            entry['path'])
                     item = Comment(user=get_user(entry),
                                    body=entry['body'],
                                    timestamp=parse_time(entry['created_at']),
                                    request_number=request['number'],
-                                   )
-                    items.append(item)
-                elif entry['type'].lower() == 'commitcomment':
-                    item = Comment(user=get_user(entry),
-                                   body=entry['body'],
-                                   timestamp=parse_time(entry['created_at']),
-                                   request_number=request['number'],
+                                   link=link,
                                    )
                     items.append(item)
                 else:
@@ -222,3 +240,128 @@ class GithubPulls(object):
         items.sort(key=lambda x: x.timestamp)
 
         return items
+
+class RssPost(object):
+    def __init__(self, timestamp, html, title, link):
+        self.timestamp = timestamp
+        self.html = html
+        self.title = title
+        self.link = link
+
+    @property
+    def guid(self):
+        return "%016x" % hash((self.timestamp, self.title))
+
+    def __repr__(self):
+        return "<RssPost %s: %s>" % (
+            self.timestamp.strftime('%Y-%m-%d'),
+            re.sub(r'[^a-zA-Z0-9: _.#*-]', ' ', self.title[:20]))
+
+def comments_to_posts(base_uri, comments):
+    posts = []
+    bunch = []
+
+    def process_bunch():
+        if not bunch:
+            return
+
+        c0 = bunch[0]
+
+        timestamp = max(c.timestamp for c in bunch)
+        request_number = c0.request_number
+        title = "#%d: %s..." % (request_number, cgi.escape(c0.body[:20]))
+        title_link = base_uri + ("pull/%d" % request_number)
+        html = []
+
+        for c in bunch:
+            text = u"<pre>%s</pre>" % cgi.escape(c.body.replace("\r", ""))
+            date_text = u"UTC %s -- %s" % (
+                c.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                cgi.escape(c.user))
+            if c.commit:
+                date_text = "%s <a href=\"%s\">[commit %s]</a>" % (
+                    date_text, cgi.escape(c.link, quote=True), c.commit[:6])
+            elif c.link:
+                date_text = "%s <a href=\"%s\">[link]</a>" % (
+                    date_text, cgi.escape(c.link, quote=True))
+
+            html.append(u"<p><b>%s</b></p><p>%s</p>" % (date_text, text))
+        html = "<hr/>".join(html)
+
+        posts.append(RssPost(timestamp=timestamp,
+                             html=html,
+                             link=title_link,
+                             title=title))
+
+        del bunch[:]
+
+    last_date = None
+    last_number = None
+    bunch_treshold = datetime.timedelta(hours=1)
+
+    for c in comments:
+        unbunch = False
+
+        if last_number != c.request_number:
+            unbunch = True
+        if last_date and (c.timestamp - last_date) > bunch_treshold:
+            unbunch = True
+
+        if unbunch:
+            process_bunch()
+            bunch.append(c)
+            last_date = c.timestamp
+            last_number = c.request_number
+        else:
+            bunch.append(c)
+            last_date = c.timestamp
+
+    process_bunch()
+
+    return posts
+
+def format_rss(posts, title=u"", description=u"", link=u"", ttl=1800):
+    timefmt = '%a, %0d %b %Y %H:%M:%S +0000'
+
+    items = []
+    for post in posts:
+        params = dict(title=post.title,
+                      link=post.link,
+                      body=cgi.escape(post.html),
+                      guid=post.guid,
+                      date=post.timestamp.strftime(timefmt))
+
+        items.append(u"""\
+<title>%(title)s</title>
+  <description>%(body)s</description>
+  <link>%(link)s</link>
+  <guid>%(guid)s</guid>
+  <pubDate>%(date)s Mon, 06 Sep 2009 16:45:00 +0000 </pubDate>\
+""" % params)
+
+    params = dict(
+        items=u"\n".join(u"<item>%s</item>" % x for x in items),
+        link=link,
+        title=title,
+        description=description,
+        ttl=ttl,
+        build_date=datetime.datetime.utcnow().strftime(timefmt),
+        pub_date=datetime.datetime.utcnow().strftime(timefmt),
+        )
+
+    rss = u"""\
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0">
+<channel>
+  <title>%(title)s</title>
+  <description>%(description)s</description>
+  <link>%(link)s</link>
+  <lastBuildDate>%(build_date)s</lastBuildDate>
+  <pubDate>%(pub_date)s</pubDate>
+  <ttl>%(ttl)d</ttl>
+%(items)s
+</channel>
+</rss>
+""" % params
+
+    return rss
