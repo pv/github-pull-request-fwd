@@ -235,7 +235,7 @@ class GithubPulls(object):
             request_timestamp_delta = (item.timestamp
                                        + datetime.timedelta(microseconds=1))
 
-            for j, entry in enumerate(request['discussion']):
+            for j, entry in enumerate(request.get('discussion', [])):
                 request_timestamp_delta += datetime.timedelta(microseconds=1)
                 if entry['type'].lower() == 'commit':
                     repo = request['head']['repository']
