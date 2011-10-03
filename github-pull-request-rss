@@ -13,11 +13,46 @@ import datetime
 import urllib2
 import json
 import cgi
+import optparse
 
 import locale
 locale.setlocale(locale.LC_ALL, 'C')
 
 API_URL_BASE = "http://github.com/api/v2/json/"
+URL_BASE = "htt://github.com/%s/%s/"
+
+def main():
+    p = optparse.OptionParser(usage=__doc__.strip())
+    p.add_option("-p", "--pr-only", action="store_true", dest="pr_only",
+                 help="produce feed containing only the pull requests")
+    p.add_option("-m", "--max-count", action="store", type="int",
+                 dest="max_count", default=100,
+                 help="maximum number of feed items (default: 100)")
+    p.add_option("-n", "--no-update", action="store_true", dest="no_update",
+                 help="don't download updated data from the internet")
+    options, args = p.parse_args()
+
+    if len(args) != 2:
+        p.error("Invalid number of arguments")
+
+    try:
+        cache_file = args[0]
+        user, project = args[1].split('/')
+    except ValueError:
+        p.error("Invalid arguments")
+
+    data = GithubPulls(user, project, cache_file)
+
+    if not options.no_update:
+        data.update()
+        data.save_cache()
+
+    base_url = URL_BASE % (user, project)
+    posts = comments_to_posts(base_url, data.comments, pr_only=options.pr_only)
+    rss = format_rss(posts[-options.max_count:])
+    sys.stdout.write(rss.encode('utf-8'))
+
+    return 0
 
 def parse_time(s):
     """Parse a time string and convert to UTC"""
@@ -53,13 +88,14 @@ class attrdict(dict):
 
 class Comment(object):
     def __init__(self, user, body, timestamp, link=None, commit=None,
-                 request_number=None):
+                 request_number=None, request_title=None):
         self.user = user
         self.body = body
         self.commit = commit
         self.link = link
         self.timestamp = timestamp
         self.request_number = int(request_number)
+        self.request_title = request_title
 
     def __repr__(self):
         if self.commit:
@@ -185,10 +221,15 @@ class GithubPulls(object):
                            link=request['html_url'],
                            timestamp=parse_time(request['created_at']),
                            request_number=request['number'],
+                           request_title=request['title'],
                            )
             items.append(item)
 
-            for entry in request['discussion']:
+            request_timestamp_delta = (item.timestamp
+                                       + datetime.timedelta(microseconds=1))
+
+            for j, entry in enumerate(request['discussion']):
+                request_timestamp_delta += datetime.timedelta(microseconds=1)
                 if entry['type'].lower() == 'commit':
                     repo = request['head']['repository']
                     if repo is None:
@@ -198,17 +239,21 @@ class GithubPulls(object):
                         entry['id'])
                     item = Comment(user=get_user(entry),
                                    body=entry['message'],
-                                   timestamp=parse_time(entry['committed_date']),
+                                   timestamp=max(request_timestamp_delta,
+                                                 parse_time(entry['committed_date'])),
                                    commit=entry['id'],
                                    link=link,
                                    request_number=request['number'],
+                                   request_title=request['title'],
                                    )
                     items.append(item)
                 elif entry['type'].lower() == 'issuecomment':
                     item = Comment(user=get_user(entry),
                                    body=entry['body'],
-                                   timestamp=parse_time(entry['created_at']),
+                                   timestamp=max(request_timestamp_delta,
+                                                 parse_time(entry['created_at'])),
                                    request_number=request['number'],
+                                   request_title=request['title'],
                                    )
                     items.append(item)
                 elif entry['type'].lower() in ('pullrequestreviewcomment',
@@ -229,8 +274,10 @@ class GithubPulls(object):
                             entry['path'])
                     item = Comment(user=get_user(entry),
                                    body=entry['body'],
-                                   timestamp=parse_time(entry['created_at']),
+                                   timestamp=max(request_timestamp_delta,
+                                                 parse_time(entry['created_at'])),
                                    request_number=request['number'],
+                                   request_title=request['title'],
                                    link=link,
                                    )
                     items.append(item)
@@ -257,9 +304,11 @@ class RssPost(object):
             self.timestamp.strftime('%Y-%m-%d'),
             re.sub(r'[^a-zA-Z0-9: _.#*-]', ' ', self.title[:20]))
 
-def comments_to_posts(base_uri, comments):
+def comments_to_posts(base_uri, comments, pr_only=False):
     posts = []
     bunch = []
+
+    seen_requests = {}
 
     def process_bunch():
         if not bunch:
@@ -269,13 +318,16 @@ def comments_to_posts(base_uri, comments):
 
         timestamp = max(c.timestamp for c in bunch)
         request_number = c0.request_number
-        title = "#%d: %s..." % (request_number, cgi.escape(c0.body[:20]))
+        request_title = c0.request_title
+        title = "#%d (%s): %s..." % (request_number,
+                                     cgi.escape(request_title[:50]),
+                                     cgi.escape(c0.body[:20]))
         title_link = base_uri + ("pull/%d" % request_number)
         html = []
 
         for c in bunch:
             text = u"<pre>%s</pre>" % cgi.escape(c.body.replace("\r", ""))
-            date_text = u"UTC %s -- %s" % (
+            date_text = u"%s -- %s" % (
                 c.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
                 cgi.escape(c.user))
             if c.commit:
@@ -288,10 +340,12 @@ def comments_to_posts(base_uri, comments):
             html.append(u"<p><b>%s</b></p><p>%s</p>" % (date_text, text))
         html = "<hr/>".join(html)
 
-        posts.append(RssPost(timestamp=timestamp,
-                             html=html,
-                             link=title_link,
-                             title=title))
+        if request_number not in seen_requests or not pr_only:
+            posts.append(RssPost(timestamp=timestamp,
+                                 html=html,
+                                 link=title_link,
+                                 title=title))
+            seen_requests[request_number] = True
 
         del bunch[:]
 
@@ -324,10 +378,10 @@ def format_rss(posts, title=u"", description=u"", link=u"", ttl=1800):
     timefmt = '%a, %0d %b %Y %H:%M:%S +0000'
 
     items = []
-    for post in posts:
+    for post in reversed(posts):
         params = dict(title=post.title,
                       link=post.link,
-                      body=cgi.escape(post.html),
+                      body=cgi.escape(post.html.replace("\n", "<br/>")),
                       guid=post.guid,
                       date=post.timestamp.strftime(timefmt))
 
@@ -336,7 +390,7 @@ def format_rss(posts, title=u"", description=u"", link=u"", ttl=1800):
   <description>%(body)s</description>
   <link>%(link)s</link>
   <guid>%(guid)s</guid>
-  <pubDate>%(date)s Mon, 06 Sep 2009 16:45:00 +0000 </pubDate>\
+  <pubDate>%(date)s</pubDate>\
 """ % params)
 
     params = dict(
@@ -365,3 +419,6 @@ def format_rss(posts, title=u"", description=u"", link=u"", ttl=1800):
 """ % params
 
     return rss
+
+if __name__ == "__main__":
+    sys.exit(main())
