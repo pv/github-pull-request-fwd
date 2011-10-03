@@ -30,6 +30,9 @@ def main():
                  help="maximum number of feed items (default: 100)")
     p.add_option("-n", "--no-update", action="store_true", dest="no_update",
                  help="don't download updated data from the internet")
+    p.add_option("-t", "--ttl", action="store", type="int",
+                 dest="ttl", default=360,
+                 help="time-to-live in minutes (default: 360)")
     options, args = p.parse_args()
 
     if len(args) != 2:
@@ -56,7 +59,8 @@ def main():
         title = "%s pull request chatter" % project
 
     posts = comments_to_posts(base_url, data.comments, pr_only=options.pr_only)
-    rss = format_rss(posts[-options.max_count:], title=title, link=link)
+    rss = format_rss(posts[-options.max_count:], title=title, link=link,
+                     ttl=options.ttl)
     sys.stdout.write(rss.encode('utf-8'))
 
     return 0
