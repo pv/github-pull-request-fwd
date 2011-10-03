@@ -19,7 +19,7 @@ import locale
 locale.setlocale(locale.LC_ALL, 'C')
 
 API_URL_BASE = "http://github.com/api/v2/json/"
-URL_BASE = "htt://github.com/%s/%s/"
+URL_BASE = "http://github.com/%s/%s/"
 
 def main():
     p = optparse.OptionParser(usage=__doc__.strip())
@@ -48,8 +48,15 @@ def main():
         data.save_cache()
 
     base_url = URL_BASE % (user, project)
+    link = base_url + "pulls"
+
+    if options.pr_only:
+        title = "%s pull requests" % project
+    else:
+        title = "%s pull request chatter" % project
+
     posts = comments_to_posts(base_url, data.comments, pr_only=options.pr_only)
-    rss = format_rss(posts[-options.max_count:])
+    rss = format_rss(posts[-options.max_count:], title=title, link=link)
     sys.stdout.write(rss.encode('utf-8'))
 
     return 0
