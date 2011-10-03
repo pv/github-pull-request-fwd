@@ -89,11 +89,28 @@ def parse_time(s):
     # Unknown
     raise ValueError("Failed to parse date %r" % s)
 
-class attrdict(dict):
-    __getattr__ = dict.__getitem__
-    __setattr__ = dict.__setitem__
-
 class Comment(object):
+    """
+    Comment (or commit) from an user in the pull request discussion
+
+    Attributes
+    ----------
+    user : str
+        Name of the user
+    body : str
+        Body text written by the user, or the commit message
+    timestamp : datetime.datetime
+        Time stamp for posting this comment
+    link : str
+        URL relevant for this comment
+    commit : str
+        Git commit relevant for this comment
+    request_number : int
+        Pull request number
+    request_title : str
+        Pull request title
+    """
+
     def __init__(self, user, body, timestamp, link=None, commit=None,
                  request_number=None, request_title=None):
         self.user = user
@@ -123,7 +140,17 @@ class Comment(object):
 
 class GithubPulls(object):
     """
-    Fetch and cache Github pull request data
+    Fetch and cache Github pull request data.
+
+    Saves most of the data in a cache file, so that the discussion
+    threads do not need to be fetched except when changed.
+
+    Attributes
+    ----------
+    comments : list of Comment
+        Comments made in the pull request, sorted in ascending order
+        by post timestamp
+
     """
 
     def __init__(self, user, project, cachefile):
@@ -296,6 +323,22 @@ class GithubPulls(object):
         return items
 
 class RssPost(object):
+    """
+    RSS post entry
+
+    Attributes
+    ----------
+    timestamp : datetime.datetime
+        Post timestamp
+    html : str
+        Post content
+    title : str
+        Post title
+    link : str
+        Link corresponding to post title
+
+    """
+
     def __init__(self, timestamp, html, title, link):
         self.timestamp = timestamp
         self.html = html
@@ -313,6 +356,14 @@ class RssPost(object):
             re.sub(r'[^a-zA-Z0-9: _.#*-]', ' ', self.title[:20]))
 
 def comments_to_posts(base_uri, comments, pr_only=False):
+    """
+    Convert comments to a series of RSS posts.
+
+    Bunch comments related to the same pull request together, if they
+    have been posted not too long ago from each other.
+
+    """
+
     posts = []
     bunch = []
 
@@ -383,6 +434,11 @@ def comments_to_posts(base_uri, comments, pr_only=False):
     return posts
 
 def format_rss(posts, title=u"", description=u"", link=u"", ttl=1800):
+    """
+    Convert a list of RSS post to a string containing RSS xml.
+
+    """
+
     timefmt = '%a, %0d %b %Y %H:%M:%S +0000'
 
     items = []
@@ -427,6 +483,7 @@ def format_rss(posts, title=u"", description=u"", link=u"", ttl=1800):
 """ % params
 
     return rss
+
 
 if __name__ == "__main__":
     sys.exit(main())
