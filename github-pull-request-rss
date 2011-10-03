@@ -304,7 +304,8 @@ class RssPost(object):
 
     @property
     def guid(self):
-        return "%016x" % hash((self.timestamp, self.title))
+        return "%016x" % hash((self.timestamp, self.html,
+                               self.title, self.link))
 
     def __repr__(self):
         return "<RssPost %s: %s>" % (
