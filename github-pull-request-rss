@@ -642,6 +642,7 @@ def comments_to_mails(base_uri, comments, last_mailed, pr_only=False):
         else:
             parent = requests[c.request_number]
             if pr_only:
+                del bunch[:]
                 return
 
         request_url = base_uri + ("pull/%d" % c.request_number)
@@ -665,7 +666,7 @@ def comments_to_mails(base_uri, comments, last_mailed, pr_only=False):
     last_user = None
 
     for c in comments:
-        if c.timestamp < last_mailed:
+        if c.timestamp <= last_mailed:
             continue
 
         unbunch = False
