@@ -16,6 +16,10 @@ import cgi
 import optparse
 import time
 import random
+import hashlib
+import email
+import jinja2
+import smtplib
 
 import locale
 locale.setlocale(locale.LC_ALL, 'C')
@@ -23,11 +27,40 @@ locale.setlocale(locale.LC_ALL, 'C')
 API_URL_BASE = "http://github.com/api/v2/json/"
 URL_BASE = "http://github.com/%s/%s/"
 
+MAIL_TEMPLATE = u"""\
+Message-ID: <{{message.unique_id}}@github-pull-request>
+From: {{message.user}} (PR) <noreply@localhost>
+{% if parent -%}
+In-Reply-To: <{{parent.unique_id}}@github-pull-request>
+References: <{{parent.unique_id}}@github-pull-request>
+Subject: Re: [PR #{{message.number}}]: {{message.title}}
+{%- else -%}
+Subject: [PR #{{message.number}}]: {{message.title}}
+{%- endif %}
+
+{% for c in comments -%}
+{%- if c.link and c.link != message.request_url -%}
+{{ c.link }}
+
+{% endif -%}
+{{ c.body }}
+{%- if not loop.last %}
+
+    ***
+
+{% endif %}
+{%- endfor %}
+
+-- 
+PR #{{ message.number }}: {{ message.request_url }}
+(Please comment on Github rather than replying to this mail.)
+"""
+
 def main():
     p = optparse.OptionParser(usage=__doc__.strip())
     p.add_option("-p", "--pr-only", action="store_true", dest="pr_only",
                  help="produce feed containing only the pull requests")
-    p.add_option("-m", "--max-count", action="store", type="int",
+    p.add_option("-c", "--max-count", action="store", type="int",
                  dest="max_count", default=100,
                  help="maximum number of feed items (default: 100)")
     p.add_option("-n", "--no-update", action="store_true", dest="no_update",
@@ -35,7 +68,26 @@ def main():
     p.add_option("-t", "--ttl", action="store", type="int",
                  dest="ttl", default=360,
                  help="time-to-live in minutes (default: 360)")
+    p.add_option("-m", "--mail", action="store",
+                 dest="mail", default=None,
+                 help="send mail to given address rather than producing RSS")
+    p.add_option("--smtp-server", action="store",
+                 dest="smtp_server", default="localhost",
+                 help="send mail via given SMTP server, instead of localhost")
+    p.add_option("--catchup-mail", action="store_true",
+                 dest="catchup", default=False,
+                 help="just mark all current pull requests as mailed")
+    p.add_option("--mail-template", action="store",
+                 dest="mail_template", default=None,
+                 help="template file for mails")
+    p.add_option("--print-template", action="store_true",
+                 dest="print_template", default=False,
+                 help="print the default mail template")
     options, args = p.parse_args()
+
+    if options.print_template:
+        print MAIL_TEMPLATE
+        return 0
 
     if len(args) != 2:
         p.error("Invalid number of arguments")
@@ -45,6 +97,12 @@ def main():
         user, project = args[1].split('/')
     except ValueError:
         p.error("Invalid arguments")
+
+    if options.mail_template is None:
+        mail_template = jinja2.Template(MAIL_TEMPLATE)
+    else:
+        with open(options.mail_template, "r") as f:
+            mail_template = jinja2.Template(f.read())
 
     data = GithubPulls(user, project, cache_file)
 
@@ -60,10 +118,30 @@ def main():
     else:
         title = "%s pull request chatter" % project
 
-    posts = comments_to_posts(base_url, data.comments, pr_only=options.pr_only)
-    rss = format_rss(posts[-options.max_count:], title=title, link=link,
-                     ttl=options.ttl)
-    sys.stdout.write(rss.encode('utf-8'))
+    if options.mail is not None:
+        mails = comments_to_mails(base_url, data.comments,
+                                  last_mailed=data.last_mailed,
+                                  pr_only=options.pr_only)
+        try:
+            if options.catchup:
+                if mails:
+                    data.last_mailed = [mails[-1].timestamp]
+                else:
+                    data.last_mailed = datetime.datetime.utcnow()
+            else:
+                send_mails(mails,
+                           receiver=options.mail,
+                           template=mail_template,
+                           server=options.smtp_server,
+                           data=data)
+        finally:
+            data.save_cache()
+    else:
+        posts = comments_to_posts(base_url, data.comments,
+                                  pr_only=options.pr_only)
+        rss = format_rss(posts[-options.max_count:], title=title, link=link,
+                         ttl=options.ttl)
+        sys.stdout.write(rss.encode('utf-8'))
 
     return 0
 
@@ -161,6 +239,7 @@ class GithubPulls(object):
 
     def __init__(self, user, project, cachefile):
         self._requests = {}
+        self.last_mailed = datetime.datetime(1970, 1, 1)
         self._cachefile = cachefile
         self.user = user
         self.project = project
@@ -175,12 +254,18 @@ class GithubPulls(object):
             self._requests = {}
             for k, v in d['requests'].items():
                 self._requests[int(k)] = v
+            self.last_mailed = datetime.datetime(1970, 1, 1)
+            if 'last_mailed' in d:
+                self.last_mailed = datetime.datetime.strptime(
+                    d['last_mailed'], '%Y-%m-%dT%H:%M:%SZ')
 
     def save_cache(self):
         """Save data to cache file"""
         tmp_file = self._cachefile + '.new'
+        last_mailed_str = self.last_mailed.strftime('%Y-%m-%dT%H:%M:%SZ')
         with open(tmp_file, 'wb') as f:
-            json.dump(dict(requests=self._requests), f)
+            json.dump(dict(requests=self._requests,
+                           last_mailed=last_mailed_str), f)
         # atomic replace
         os.rename(tmp_file, self._cachefile)
 
@@ -247,7 +332,9 @@ class GithubPulls(object):
                 break
             except urllib2.HTTPError, err:
                 last_err = err
-                time.sleep(1 + 10*trial**2)
+                w = 1 + 10*trial**2
+                print >> sys.stderr, "Fail: %s, retry in %d sec" % (err, w)
+                time.sleep(w)
         else:
             raise RuntimeError("Fetching request failed: %s" % last_err)
 
@@ -263,7 +350,7 @@ class GithubPulls(object):
 
         def get_user(item):
             if not item['user']:
-                return "Nobody"
+                return "(No user)"
             return item['user'].get('name') or item['user']['login']
 
         for request in self._requests.values():
@@ -338,6 +425,11 @@ class GithubPulls(object):
         items.sort(key=lambda x: x.timestamp)
 
         return items
+
+
+#------------------------------------------------------------------------------
+# RSS formatting
+#------------------------------------------------------------------------------
 
 class RssPost(object):
     """
@@ -450,6 +542,7 @@ def comments_to_posts(base_uri, comments, pr_only=False):
 
     return posts
 
+
 def format_rss(posts, title=u"", description=u"", link=u"", ttl=1800):
     """
     Convert a list of RSS post to a string containing RSS xml.
@@ -501,6 +594,117 @@ def format_rss(posts, title=u"", description=u"", link=u"", ttl=1800):
 
     return rss
 
+
+#------------------------------------------------------------------------------
+# Mail formatting
+#------------------------------------------------------------------------------
+
+class Mail(object):
+    def __init__(self, user, timestamp, number, title, parent,
+                 request_url, comments):
+        self.user = user
+        self.timestamp = timestamp
+        self.title = title
+        self.number = number
+        self.parent = parent
+        self.request_url = request_url
+        self.comments = comments
+
+    @property
+    def unique_id(self):
+        r = hashlib.md5()
+        r.update(str(self.number))
+        r.update(self.user.encode('utf-8'))
+        r.update(self.timestamp.strftime("%Y-%m-%-dT%H:%M:%SZ"))
+        return r.hexdigest()
+
+    def format(self, template):
+        return template.render(message=self, parent=self.parent,
+                               comments=self.comments).encode('utf-8')
+
+def comments_to_mails(base_uri, comments, last_mailed, pr_only=False):
+    mails = []
+    requests = {}
+
+    bunch = []
+
+    def process_bunch():
+        if not bunch:
+            return
+
+        c = bunch[0]
+        if c.request_number not in requests:
+            parent = None
+        else:
+            parent = requests[c.request_number]
+            if pr_only:
+                return
+
+        request_url = base_uri + ("pull/%d" % c.request_number)
+
+        m = Mail(user=c.user,
+                 comments=list(bunch),
+                 timestamp=c.timestamp,
+                 number=c.request_number,
+                 title=c.request_title,
+                 parent=parent,
+                 request_url=request_url)
+
+        mails.append(m)
+
+        if parent is None:
+            requests[c.request_number] = m
+
+        del bunch[:]
+
+    last_number = None
+    last_user = None
+
+    for c in comments:
+        if c.timestamp < last_mailed:
+            continue
+
+        unbunch = False
+        if last_number != c.request_number or last_user != c.user:
+            unbunch = True
+
+        if unbunch:
+            process_bunch()
+            bunch.append(c)
+            last_number = c.request_number
+            last_user = c.user
+        else:
+            bunch.append(c)
+
+    process_bunch()
+
+    return mails
+
+def send_mails(mails, receiver, template, server, data):
+    mails.sort(key=lambda x: x.timestamp)
+
+    smtp = smtplib.SMTP()
+    smtp.connect(server)
+
+    for j, mail in enumerate(mails):
+        text = mail.format(template)
+        msg = email.message_from_string(text)
+        msg['Date'] = mail.timestamp.strftime("%a, %d %b %Y %H:%M:%S +000")
+
+        assert 'From' in msg and 'Subject' in msg
+
+        sender_name, sender_email = email.utils.parseaddr(msg['From'])
+        print >> sys.stderr, "Sending mail (%d/%d): %s" % (
+            j, len(mails), msg['Subject'][:40])
+        smtp.sendmail(sender_email, [receiver], msg.as_string())
+
+        data.last_mailed = mail.timestamp
+
+        if (j+1) % 200 == 0:
+            # reconnect
+            smtp.close()
+            smtp = smtplib.SMTP()
+            smtp.connect(server)
 
 if __name__ == "__main__":
     sys.exit(main())
