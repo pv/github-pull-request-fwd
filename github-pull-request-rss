@@ -80,6 +80,9 @@ def main():
     p.add_option("--mail-template", action="store",
                  dest="mail_template", default=None,
                  help="template file for mails")
+    p.add_option("--mbox", action="store_true",
+                 dest="mail_mbox", default=False,
+                 help="output mbox file instead of sending mail")
     p.add_option("--print-template", action="store_true",
                  dest="print_template", default=False,
                  help="print the default mail template")
@@ -118,7 +121,7 @@ def main():
     else:
         title = "%s pull request chatter" % project
 
-    if options.mail is not None:
+    if options.mail is not None or options.mail_mbox:
         mails = comments_to_mails(base_url, data.comments,
                                   last_mailed=data.last_mailed,
                                   pr_only=options.pr_only)
@@ -133,7 +136,8 @@ def main():
                            receiver=options.mail,
                            template=mail_template,
                            server=options.smtp_server,
-                           data=data)
+                           data=data,
+                           output_mbox=options.mail_mbox)
         finally:
             data.save_cache()
     else:
@@ -680,11 +684,12 @@ def comments_to_mails(base_uri, comments, last_mailed, pr_only=False):
 
     return mails
 
-def send_mails(mails, receiver, template, server, data):
+def send_mails(mails, receiver, template, server, data, output_mbox=False):
     mails.sort(key=lambda x: x.timestamp)
 
-    smtp = smtplib.SMTP()
-    smtp.connect(server)
+    if not output_mbox:
+        smtp = smtplib.SMTP()
+        smtp.connect(server)
 
     for j, mail in enumerate(mails):
         text = mail.format(template)
@@ -696,11 +701,16 @@ def send_mails(mails, receiver, template, server, data):
         sender_name, sender_email = email.utils.parseaddr(msg['From'])
         print >> sys.stderr, "Sending mail (%d/%d): %s" % (
             j, len(mails), msg['Subject'][:40])
-        smtp.sendmail(sender_email, [receiver], msg.as_string())
+
+        if output_mbox:
+            print msg
+            print ""
+        else:
+            smtp.sendmail(sender_email, [receiver], msg.as_string())
 
         data.last_mailed = mail.timestamp
 
-        if (j+1) % 200 == 0:
+        if (j+1) % 200 == 0 and not output_mbox:
             # reconnect
             smtp.close()
             smtp = smtplib.SMTP()
