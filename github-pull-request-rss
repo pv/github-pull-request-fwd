@@ -14,6 +14,8 @@ import urllib2
 import json
 import cgi
 import optparse
+import time
+import random
 
 import locale
 locale.setlocale(locale.LC_ALL, 'C')
@@ -237,7 +239,18 @@ class GithubPulls(object):
         url = API_URL_BASE + "pulls/%s/%s/%d" % (self.user, self.project,
                                                  number)
         print >> sys.stderr, "Fetch:", url
-        f = urllib2.urlopen(url)
+        last_err = None
+        for trial in range(3):
+            try:
+                time.sleep(random.random())
+                f = urllib2.urlopen(url)
+                break
+            except urllib2.HTTPError, err:
+                last_err = err
+                time.sleep(1 + 10*trial**2)
+        else:
+            raise RuntimeError("Fetching request failed: %s" % last_err)
+
         try:
             data = json.load(f)
         finally:
