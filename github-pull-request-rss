@@ -1,6 +1,8 @@
 #!/usr/bin/python
 """
-github-pull-request-rss CACHE.json USER/PROJECT > out.rss
+github-pull-request-rss rss CACHE.json USER/PROJECT > out.rss
+       github-pull-request-rss mbox CACHE.json USER/PROJECT > out.mbox
+       github-pull-request-rss mail CACHE.json USER/PROJECT RECEIVER@SOMEWHERE
 
 Generate an RSS feed from Github Pull Requests and all comments in
 them.
@@ -43,6 +45,9 @@ Subject: [PR #{{message.number}}]: {{message.title}}
 {{ c.link }}
 
 {% endif -%}
+{% if not parent -%}{{message.title}}
+
+{% endif -%}
 {{ c.body }}
 {%- if not loop.last %}
 
@@ -61,28 +66,22 @@ def main():
     p.add_option("-p", "--pr-only", action="store_true", dest="pr_only",
                  help="produce feed containing only the pull requests")
     p.add_option("-c", "--max-count", action="store", type="int",
-                 dest="max_count", default=100,
+                 dest="max_count", default=100, metavar="COUNT",
                  help="maximum number of feed items (default: 100)")
     p.add_option("-n", "--no-update", action="store_true", dest="no_update",
                  help="don't download updated data from the internet")
     p.add_option("-t", "--ttl", action="store", type="int",
                  dest="ttl", default=360,
                  help="time-to-live in minutes (default: 360)")
-    p.add_option("-m", "--mail", action="store",
-                 dest="mail", default=None,
-                 help="send mail to given address rather than producing RSS")
-    p.add_option("--smtp-server", action="store",
+    p.add_option("--smtp-server", action="store", metavar="HOST",
                  dest="smtp_server", default="localhost",
                  help="send mail via given SMTP server, instead of localhost")
-    p.add_option("--catchup-mail", action="store_true",
-                 dest="catchup", default=False,
-                 help="just mark all current pull requests as mailed")
-    p.add_option("--mail-template", action="store",
+    p.add_option("--catchup-mail", action="store",
+                 dest="catchup", default=None, metavar="DATE",
+                 help="consider only mails after DATE")
+    p.add_option("--mail-template", action="store", metavar="FILE",
                  dest="mail_template", default=None,
                  help="template file for mails")
-    p.add_option("--mbox", action="store_true",
-                 dest="mail_mbox", default=False,
-                 help="output mbox file instead of sending mail")
     p.add_option("--print-template", action="store_true",
                  dest="print_template", default=False,
                  help="print the default mail template")
@@ -92,14 +91,19 @@ def main():
         print MAIL_TEMPLATE
         return 0
 
-    if len(args) != 2:
-        p.error("Invalid number of arguments")
-
     try:
-        cache_file = args[0]
-        user, project = args[1].split('/')
+        mode = args[0]
+        cache_file = args[1]
+        user, project = args[2].split('/')
+        if mode == "mail":
+            receiver = args[3]
+        else:
+            receiver = None
     except ValueError:
         p.error("Invalid arguments")
+
+    if mode not in ["rss", "mail", "mbox"]:
+        p.error("Invalid mode %r" % mode)
 
     if options.mail_template is None:
         mail_template = jinja2.Template(MAIL_TEMPLATE)
@@ -121,31 +125,33 @@ def main():
     else:
         title = "%s pull request chatter" % project
 
-    if options.mail is not None or options.mail_mbox:
+    if options.catchup is not None:
+        if options.catchup in ("now", "all"):
+            data.last_mailed = datetime.datetime.utcnow()
+        else:
+            data.last_mailed = parse_time(options.catchup)
+
+    if mode in ("mail", "mbox"):
         mails = comments_to_mails(base_url, data.comments,
                                   last_mailed=data.last_mailed,
                                   pr_only=options.pr_only)
         try:
-            if options.catchup:
-                if mails:
-                    data.last_mailed = [mails[-1].timestamp]
-                else:
-                    data.last_mailed = datetime.datetime.utcnow()
-            else:
-                send_mails(mails,
-                           receiver=options.mail,
-                           template=mail_template,
-                           server=options.smtp_server,
-                           data=data,
-                           output_mbox=options.mail_mbox)
+            send_mails(mails,
+                       receiver=receiver,
+                       template=mail_template,
+                       server=options.smtp_server,
+                       data=data,
+                       output_mbox=(mode != "mail"))
         finally:
             data.save_cache()
-    else:
+    elif mode == "rss":
         posts = comments_to_posts(base_url, data.comments,
                                   pr_only=options.pr_only)
         rss = format_rss(posts[-options.max_count:], title=title, link=link,
                          ttl=options.ttl)
         sys.stdout.write(rss.encode('utf-8'))
+    else:
+        p.error("Unknown mode %r" % mode)
 
     return 0
 
@@ -173,6 +179,18 @@ def parse_time(s):
         else:
             t += dt
         return t
+
+    # Fallbacks
+    fmts = ["%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%d",
+            "%Y-%m",
+            "%Y"]
+    for fmt in fmts:
+        try:
+            return datetime.datetime.strptime(s, fmt)
+        except ValueError:
+            continue
 
     # Unknown
     raise ValueError("Failed to parse date %r" % s)
