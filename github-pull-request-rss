@@ -4,8 +4,12 @@ github-pull-request-rss rss CACHE.json USER/PROJECT > out.rss
        github-pull-request-rss mbox CACHE.json USER/PROJECT > out.mbox
        github-pull-request-rss mail CACHE.json USER/PROJECT RECEIVER@SOMEWHERE
 
+
 Generate an RSS feed from Github Pull Requests and all comments in
 them.
+
+What mails are generated is determined by the ``last_mailed`` timestamp
+in CACHE.json, which you can adjust with the ``--catchup-mails`` option.
 
 """
 import os
