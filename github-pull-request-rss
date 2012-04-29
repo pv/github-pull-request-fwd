@@ -50,7 +50,7 @@ Subject: [PR #{{message.number}}]: {{message.title}}
 {{ c.link }}
 
 {% endif -%}
-{% if not parent -%}{{message.title}}
+{% if not parent and loop.first -%}{{message.title}}
 
 {% endif -%}
 {{ c.body }}
@@ -139,7 +139,6 @@ def main():
 
         if mode in ("mail", "mbox"):
             mails = comments_to_mails(base_url, data.comments,
-                                      last_mailed=data.last_mailed,
                                       pr_only=options.pr_only)
             try:
                 send_mails(mails,
@@ -650,7 +649,7 @@ class Mail(object):
         return template.render(message=self, parent=self.parent,
                                comments=self.comments).encode('utf-8')
 
-def comments_to_mails(base_uri, comments, last_mailed, pr_only=False):
+def comments_to_mails(base_uri, comments, pr_only=False):
     mails = []
     requests = {}
 
@@ -673,7 +672,7 @@ def comments_to_mails(base_uri, comments, last_mailed, pr_only=False):
 
         m = Mail(user=c.user,
                  comments=list(bunch),
-                 timestamp=c.timestamp,
+                 timestamp=max(x.timestamp for x in bunch),
                  number=c.request_number,
                  title=c.request_title,
                  parent=parent,
@@ -690,9 +689,6 @@ def comments_to_mails(base_uri, comments, last_mailed, pr_only=False):
     last_user = None
 
     for c in comments:
-        if c.timestamp <= last_mailed:
-            continue
-
         unbunch = False
         if last_number != c.request_number or last_user != c.user:
             unbunch = True
@@ -717,6 +713,9 @@ def send_mails(mails, receiver, template, server, data, output_mbox=False):
         smtp.connect(server)
 
     for j, mail in enumerate(mails):
+        if mail.timestamp <= data.last_mailed:
+            continue
+
         text = mail.format(template)
         msg = email.message_from_string(text)
         msg['Date'] = mail.timestamp.strftime("%a, %d %b %Y %H:%M:%S +000")
@@ -733,7 +732,9 @@ def send_mails(mails, receiver, template, server, data, output_mbox=False):
         else:
             smtp.sendmail(sender_email, [receiver], msg.as_string())
 
-        data.last_mailed = mail.timestamp
+        stamp2 = mail.timestamp
+        if stamp2 > data.last_mailed:
+            data.last_mailed = stamp2
 
         if (j+1) % 200 == 0 and not output_mbox:
             # reconnect
