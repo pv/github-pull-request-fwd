@@ -26,6 +26,7 @@ import hashlib
 import email
 import jinja2
 import smtplib
+import errno
 
 import locale
 locale.setlocale(locale.LC_ALL, 'C')
@@ -115,47 +116,48 @@ def main():
         with open(options.mail_template, "r") as f:
             mail_template = jinja2.Template(f.read())
 
-    data = GithubPulls(user, project, cache_file)
+    with LockFile(cache_file + ".lock"):
+        data = GithubPulls(user, project, cache_file)
 
-    if not options.no_update:
-        data.update()
-        data.save_cache()
-
-    base_url = URL_BASE % (user, project)
-    link = base_url + "pulls"
-
-    if options.pr_only:
-        title = "%s pull requests" % project
-    else:
-        title = "%s pull request chatter" % project
-
-    if options.catchup is not None:
-        if options.catchup in ("now", "all"):
-            data.last_mailed = datetime.datetime.utcnow()
-        else:
-            data.last_mailed = parse_time(options.catchup)
-
-    if mode in ("mail", "mbox"):
-        mails = comments_to_mails(base_url, data.comments,
-                                  last_mailed=data.last_mailed,
-                                  pr_only=options.pr_only)
-        try:
-            send_mails(mails,
-                       receiver=receiver,
-                       template=mail_template,
-                       server=options.smtp_server,
-                       data=data,
-                       output_mbox=(mode != "mail"))
-        finally:
+        if not options.no_update:
+            data.update()
             data.save_cache()
-    elif mode == "rss":
-        posts = comments_to_posts(base_url, data.comments,
-                                  pr_only=options.pr_only)
-        rss = format_rss(posts[-options.max_count:], title=title, link=link,
-                         ttl=options.ttl)
-        sys.stdout.write(rss.encode('utf-8'))
-    else:
-        p.error("Unknown mode %r" % mode)
+
+        base_url = URL_BASE % (user, project)
+        link = base_url + "pulls"
+
+        if options.pr_only:
+            title = "%s pull requests" % project
+        else:
+            title = "%s pull request chatter" % project
+
+        if options.catchup is not None:
+            if options.catchup in ("now", "all"):
+                data.last_mailed = datetime.datetime.utcnow()
+            else:
+                data.last_mailed = parse_time(options.catchup)
+
+        if mode in ("mail", "mbox"):
+            mails = comments_to_mails(base_url, data.comments,
+                                      last_mailed=data.last_mailed,
+                                      pr_only=options.pr_only)
+            try:
+                send_mails(mails,
+                           receiver=receiver,
+                           template=mail_template,
+                           server=options.smtp_server,
+                           data=data,
+                           output_mbox=(mode != "mail"))
+            finally:
+                data.save_cache()
+        elif mode == "rss":
+            posts = comments_to_posts(base_url, data.comments,
+                                      pr_only=options.pr_only)
+            rss = format_rss(posts[-options.max_count:], title=title, link=link,
+                             ttl=options.ttl)
+            sys.stdout.write(rss.encode('utf-8'))
+        else:
+            p.error("Unknown mode %r" % mode)
 
     return 0
 
@@ -738,6 +740,58 @@ def send_mails(mails, receiver, template, server, data, output_mbox=False):
             smtp.close()
             smtp = smtplib.SMTP()
             smtp.connect(server)
+
+
+#------------------------------------------------------------------------------
+# Lock file
+#------------------------------------------------------------------------------
+
+class LockFile(object):
+    """
+    Lock file (Unix-only).
+    """
+
+    def __init__(self, filename):
+        self.filename = filename
+        self.fd = None
+
+    def __enter__(self):
+        for tries in range(3):
+            if tries > 0:
+                print >> sys.stderr, "Another process running -- waiting..."
+                time.sleep(1 + tries**2)
+
+            try:
+                os.symlink(str(os.getpid()), self.filename)
+                break
+            except OSError, err:
+                if err.errno != errno.EEXIST:
+                    raise
+
+                try:
+                    pid = int(os.readlink(self.filename))
+                except OSError, err:
+                    if err.errno == errno.ENOENT:
+                        continue
+                    raise
+
+                # Check if it's still alive
+                try:
+                    os.kill(pid, 0)
+                except OSError, err:
+                    if err.errno == errno.ESRCH:
+                        # no such process
+                        os.unlink(self.filename)
+                        continue
+                    raise
+        else:
+            raise RuntimeError("Another process running -- timed out.")
+
+    def __exit__(self, type, value, traceback):
+        os.unlink(self.filename)
+
+
+#------------------------------------------------------------------------------
 
 if __name__ == "__main__":
     sys.exit(main())
