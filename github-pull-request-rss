@@ -27,6 +27,7 @@ import email
 import jinja2
 import smtplib
 import errno
+import tempfile
 
 import locale
 locale.setlocale(locale.LC_ALL, 'C')
@@ -288,7 +289,10 @@ class GithubPulls(object):
 
     def save_cache(self):
         """Save data to cache file"""
-        tmp_file = self._cachefile + '.new'
+        fd, tmp_file = tempfile.mkstemp(
+            dir=os.path.dirname(self._cachefile),
+            prefix=os.path.basename(self._cachefile) + ".")
+        os.close(fd)
         last_mailed_str = self.last_mailed.strftime('%Y-%m-%dT%H:%M:%SZ')
         with open(tmp_file, 'wb') as f:
             json.dump(dict(requests=self._requests,
