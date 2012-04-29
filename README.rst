@@ -28,11 +28,12 @@ in CACHE.json, which you can adjust with the ``--catchup-mails`` option.
 Options:
   -h, --help            show this help message and exit
   -p, --pr-only         produce feed containing only the pull requests
-  -c COUNT, --max-count=COUNT
-                        maximum number of feed items (default: 100)
   -n, --no-update       don't download updated data from the internet
-  -t TTL, --ttl=TTL     time-to-live in minutes (default: 360)
-  --smtp-server=HOST    send mail via given SMTP server, instead of localhost
-  --catchup-mail=DATE   consider only mails after DATE
-  --mail-template=FILE  template file for mails
-  --print-template      print the default mail template
+  -c COUNT, --max-count=COUNT
+                        rss: maximum number of feed items (default: 100)
+  -t TTL, --ttl=TTL     rss: time-to-live in minutes (default: 360)
+  --smtp-server=HOST    mail: send mail via given SMTP server, instead of
+                        localhost
+  --catchup-mail=DATE   mail: consider only mails after DATE
+  --mail-template=FILE  mail: template file for mails
+  --print-template      mail: print the default mail template

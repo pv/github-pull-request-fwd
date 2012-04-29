@@ -70,26 +70,26 @@ def main():
     p = optparse.OptionParser(usage=__doc__.strip())
     p.add_option("-p", "--pr-only", action="store_true", dest="pr_only",
                  help="produce feed containing only the pull requests")
-    p.add_option("-c", "--max-count", action="store", type="int",
-                 dest="max_count", default=100, metavar="COUNT",
-                 help="maximum number of feed items (default: 100)")
     p.add_option("-n", "--no-update", action="store_true", dest="no_update",
                  help="don't download updated data from the internet")
+    p.add_option("-c", "--max-count", action="store", type="int",
+                 dest="max_count", default=100, metavar="COUNT",
+                 help="rss: maximum number of feed items (default: 100)")
     p.add_option("-t", "--ttl", action="store", type="int",
                  dest="ttl", default=360,
-                 help="time-to-live in minutes (default: 360)")
+                 help="rss: time-to-live in minutes (default: 360)")
     p.add_option("--smtp-server", action="store", metavar="HOST",
                  dest="smtp_server", default="localhost",
-                 help="send mail via given SMTP server, instead of localhost")
+                 help="mail: send mail via given SMTP server, instead of localhost")
     p.add_option("--catchup-mail", action="store",
                  dest="catchup", default=None, metavar="DATE",
-                 help="consider only mails after DATE")
+                 help="mail: consider only mails after DATE")
     p.add_option("--mail-template", action="store", metavar="FILE",
                  dest="mail_template", default=None,
-                 help="template file for mails")
+                 help="mail: template file for mails")
     p.add_option("--print-template", action="store_true",
                  dest="print_template", default=False,
-                 help="print the default mail template")
+                 help="mail: print the default mail template")
     options, args = p.parse_args()
 
     if options.print_template:
