@@ -1,8 +1,8 @@
 #!/usr/bin/python
 """
-github-pull-request-rss rss CACHE.json USER/PROJECT > out.rss
-       github-pull-request-rss mbox CACHE.json USER/PROJECT > out.mbox
-       github-pull-request-rss mail CACHE.json USER/PROJECT RECEIVER@SOMEWHERE
+github-pull-request-fwd rss CACHE.json USER/PROJECT > out.rss
+       github-pull-request-fwd mbox CACHE.json USER/PROJECT > out.mbox
+       github-pull-request-fwd mail CACHE.json USER/PROJECT RECEIVER@SOMEWHERE
 
 
 Generate an RSS feed from Github Pull Requests and all comments in
@@ -676,7 +676,7 @@ def comments_to_mails(base_uri, comments, pr_only=False):
 
         m = Mail(user=c.user,
                  comments=list(bunch),
-                 timestamp=max(x.timestamp for x in bunch),
+                 timestamp=c.timestamp,
                  number=c.request_number,
                  title=c.request_title,
                  parent=parent,

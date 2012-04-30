@@ -1,23 +1,23 @@
-github-pull-request-rss
+github-pull-request-fwd
 =======================
 
-Generate a RSS feed, mail mbox (or just send the mails), containing
-Github pull requests and, optionally, the chatter therein.
+Grab Github pull requests, and generate a RSS feed, a mail mbox, or just send
+the mails. Optionally, all chatter therein can be included.
 
-Can be called periodically, e.g., in crontab, or otherwise activated
-by trigger.
+Can be called periodically, e.g., in crontab, or activated by a trigger, for
+example a Github commit hook.
 
 Usage
 -----
 
 ::
 
-    github-pull-request-rss rss CACHE.json USER/PROJECT > out.rss
-    github-pull-request-rss mbox CACHE.json USER/PROJECT > out.mbox
+    github-pull-request-fwd rss CACHE.json USER/PROJECT > out.rss
+    github-pull-request-fwd mbox CACHE.json USER/PROJECT > out.mbox
 
 or (careful!)::
 
-    github-pull-request-rss mail CACHE.json USER/PROJECT RECEIVER@SOMEWHERE
+    github-pull-request-fwd mail CACHE.json USER/PROJECT RECEIVER@SOMEWHERE
 
 Generate an RSS feed from Github Pull Requests and all comments in
 them.
