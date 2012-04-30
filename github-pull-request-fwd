@@ -697,7 +697,7 @@ def comments_to_mails(base_uri, comments, last_mailed, pr_only=False):
         unbunch = False
         if last_number != c.request_number or last_user != c.user:
             unbunch = True
-        if bunch and bunch[0].timestamp <= last_mailed and c.timestamp > last_mailed:
+        if bunch and max(x.timestamp for x in bunch) <= last_mailed and c.timestamp > last_mailed:
             unbunch = True
 
         if unbunch:
