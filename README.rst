@@ -19,7 +19,7 @@ or (careful!)::
 
     github-pull-request-fwd mail CACHE.json USER/PROJECT RECEIVER@SOMEWHERE
 
-Generate an RSS feed from Github Pull Requests and all comments in
+Generate an RSS feed or mails from Github Pull Requests and all comments in
 them.
 
 What mails are generated is determined by the ``last_mailed`` timestamp
