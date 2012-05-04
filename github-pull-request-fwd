@@ -105,7 +105,7 @@ def main():
             receiver = args[3]
         else:
             receiver = None
-    except ValueError:
+    except (ValueError, IndexError):
         p.error("Invalid arguments")
 
     if mode not in ["rss", "mail", "mbox"]:
