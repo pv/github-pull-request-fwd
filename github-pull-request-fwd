@@ -713,19 +713,14 @@ def comments_to_mails(base_uri, comments, last_mailed, pr_only=False):
     return mails
 
 def send_mails(mails, receiver, template, server, data, output_mbox=False):
+    mails = [x for x in mails if x.timestamp > data.last_mailed]
     mails.sort(key=lambda x: x.timestamp)
 
     if not output_mbox:
         smtp = smtplib.SMTP()
         smtp.connect(server)
 
-    new_mail_reached = False
-
     for j, mail in enumerate(mails):
-        if mail.timestamp <= data.last_mailed and not new_mail_reached:
-            continue
-        new_mail_reached = True
-
         text = mail.format(template)
         msg = email.message_from_string(text)
         msg['Date'] = mail.timestamp.strftime("%a, %d %b %Y %H:%M:%S +000")
