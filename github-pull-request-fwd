@@ -586,7 +586,7 @@ def format_rss(posts, title=u"", description=u"", link=u"", ttl=1800):
     items = []
     for post in reversed(posts):
         body = cgi.escape(post.html.replace("\n", "<br/>"))
-        body = re.sub(u"[\u0000-\u0031]", "", body)
+        body = re.sub(u"[\u0000-\u001f]", "", body)
         params = dict(title=post.title,
                       link=post.link,
                       body=body,
