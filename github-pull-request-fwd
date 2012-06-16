@@ -121,8 +121,11 @@ def main():
         data = GithubPulls(user, project, cache_file)
 
         if not options.no_update:
-            data.update()
-            data.save_cache()
+            try:
+                data.update()
+            except IOError:
+                # Should still be in a consistent state
+                data.save_cache()
 
         base_url = URL_BASE % (user, project)
         link = base_url + "pulls"
@@ -321,26 +324,31 @@ class GithubPulls(object):
             old_request = self._requests.get(request['number'])
 
             if old_request is None:
-                need_update.add(request['number'])
+                request['_need_update'] = 1
             else:
                 t_new = parse_time(request['updated_at'])
                 t_old = parse_time(old_request['updated_at'])
                 if t_new != t_old:
-                    need_update.add(request['number'])
+                    request['_need_update'] = 1
+                else:
+                    request['_need_update'] = 0
 
             new_list[request['number']] = request
 
         # Fetch updated data, when needed
+        old_list = self._requests
+        self._requests = new_list
+
         for number, request in new_list.items():
-            if number not in need_update:
+            if not request['_need_update']:
                 req = dict(self._requests[number])
                 req.update(request)
                 request.update(req)
             else:
-                self._fetch_request(number, request)
-
-        # Done
-        self._requests = new_list
+                req = dict(self._requests[number])
+                self._fetch_request(number, req)
+                request.update(req)
+                request['_need_update'] = 0
 
     def _fetch_request(self, number, request):
         commits_url = API_URL_BASE + "repos/%s/%s/pulls/%d/commits" % (
