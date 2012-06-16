@@ -303,8 +303,13 @@ class GithubPulls(object):
 
     def update(self):
         """Update local state by fetching data from github.com"""
-        url = API_URL_BASE + "repos/%s/%s/pulls" % (self.user, self.project)
+        url = API_URL_BASE + "repos/%s/%s/pulls?state=open" % (
+            self.user, self.project)
         data = self._fetch_json_persistent(url)
+
+        url = API_URL_BASE + "repos/%s/%s/pulls?state=closed" % (
+            self.user, self.project)
+        data += self._fetch_json_persistent(url)
 
         self._update_from_data(data)
 
