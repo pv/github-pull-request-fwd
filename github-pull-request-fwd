@@ -343,7 +343,7 @@ class GithubPulls(object):
 
         for number, request in new_list.items():
             if not request['_need_update']:
-                req = dict(self._requests[number])
+                req = dict(old_list[number])
                 req.update(request)
                 request.update(req)
             else:
