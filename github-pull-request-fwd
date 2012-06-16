@@ -347,7 +347,7 @@ class GithubPulls(object):
                 req.update(request)
                 request.update(req)
             else:
-                req = dict(self._requests[number])
+                req = dict(request)
                 self._fetch_request(number, req)
                 request.update(req)
             request['_need_update'] = 0
