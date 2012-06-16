@@ -32,8 +32,8 @@ import tempfile
 import locale
 locale.setlocale(locale.LC_ALL, 'C')
 
-API_URL_BASE = "http://github.com/api/v2/json/"
-URL_BASE = "http://github.com/%s/%s/"
+API_URL_BASE = "https://api.github.com/"
+URL_BASE = "https://github.com/%s/%s/"
 
 MAIL_TEMPLATE = u"""\
 Message-ID: <{{message.unique_id}}@github-pull-request>
@@ -165,15 +165,15 @@ def main():
 def parse_time(s):
     """Parse a time string and convert to UTC"""
 
+    # UTC time format
+    if s.endswith('Z'):
+        return datetime.datetime.strptime(s, '%Y-%m-%dT%H:%M:%SZ')
+
     # US time format
     m = re.match(r'^([0-9]+)/([0-9]+)/([0-9]+)\s*([0-9]+:[0-9]+:[0-9]+)\s*([+-][0-9][0-9][0-9][0-9])\s*$', s)
     if m:
         s = "%s-%s-%sT%s%s:%s" % (m.group(1), m.group(2), m.group(3),
                                   m.group(4), m.group(5)[:-2], m.group(5)[-2:])
-
-    # UTC time format
-    if s.endswith('Z'):
-        return datetime.datetime.strptime(s, '%Y-%m-%dT%H:%M:%SZ')
 
     # TZ time format
     m = re.search(r'([+-])([0-9]+):([0-9]+)$', s)
@@ -303,31 +303,16 @@ class GithubPulls(object):
 
     def update(self):
         """Update local state by fetching data from github.com"""
-        url = API_URL_BASE + "pulls/%s/%s/open" % (self.user, self.project)
-        print >> sys.stderr, "Fetch:", url
-        f = urllib2.urlopen(url)
-        try:
-            open_data = json.load(f)
-        finally:
-            f.close()
+        url = API_URL_BASE + "repos/%s/%s/pulls" % (self.user, self.project)
+        data = self._fetch_json_persistent(url)
 
-        url = API_URL_BASE + "pulls/%s/%s/closed" % (self.user, self.project)
-        print >> sys.stderr, "Fetch:", url
-        f = urllib2.urlopen(url)
-        try:
-            closed_data = json.load(f)
-        finally:
-            f.close()
-
-        data = open_data
-        data['pulls'].extend(closed_data['pulls'])
         self._update_from_data(data)
 
     def _update_from_data(self, data):
         # Check which pull requests need updating
         new_list = {}
         need_update = set()
-        for request in data['pulls']:
+        for request in data:
             old_request = self._requests.get(request['number'])
 
             if old_request is None:
@@ -353,13 +338,36 @@ class GithubPulls(object):
         self._requests = new_list
 
     def _fetch_request(self, number, request):
-        url = API_URL_BASE + "pulls/%s/%s/%d" % (self.user, self.project,
-                                                 number)
+        commits_url = API_URL_BASE + "repos/%s/%s/pulls/%d/commits" % (
+            self.user, self.project, request['number'])
+        commits = self._fetch_json_persistent(commits_url)
+
+        comments_url = request['_links']['comments']['href']
+        comments = self._fetch_json_persistent(comments_url)
+
+        review_comments_url = request['_links']['review_comments']['href']
+        review_comments = self._fetch_json_persistent(review_comments_url)
+
+        discussion = []
+        for x in commits:
+            x['type'] = 'commit'
+            discussion.append(x)
+        for x in comments:
+            x['type'] = 'comment'
+            discussion.append(x)
+        for x in review_comments:
+            x['type'] = 'review_comment'
+            discussion.append(x)
+        request['discussion'] = discussion
+
+    def _fetch_json_persistent(self, url):
         print >> sys.stderr, "Fetch:", url
         last_err = None
         for trial in range(3):
             try:
                 time.sleep(random.random())
+                req = urllib2.Request(url, None,
+                                      {'Accept': 'application/vnd.github.beta+json'})
                 f = urllib2.urlopen(url)
                 break
             except urllib2.HTTPError, err:
@@ -371,19 +379,25 @@ class GithubPulls(object):
             raise RuntimeError("Fetching request failed: %s" % last_err)
 
         try:
-            data = json.load(f)
+            return json.load(f)
         finally:
             f.close()
-        request.update(data['pull'])
 
     @property
     def comments(self):
         items = []
 
         def get_user(item):
-            if not item['user']:
+            if 'user' in item and item['user']:
+                return item['user'].get('name') or item['user']['login']
+            elif 'author' in item and 'committer' in item and item['author'] and item['committer']:
+                author = item['author'].get('name') or item['author']['login']
+                committer = item['committer'].get('name') or item['committer']['login']
+                return "%s [%s]" % (author, committer)
+            elif 'author' in item and item['author']:
+                return item['author'].get('name') or item['author']['login']
+            else:
                 return "(No user)"
-            return item['user'].get('name') or item['user']['login']
 
         for request in self._requests.values():
             item = Comment(user=get_user(request),
@@ -401,23 +415,23 @@ class GithubPulls(object):
             for j, entry in enumerate(request.get('discussion', [])):
                 request_timestamp_delta += datetime.timedelta(microseconds=1)
                 if entry['type'].lower() == 'commit':
-                    repo = request['head']['repository']
+                    repo = request['head']['repo']
                     if repo is None:
-                        repo = request['base']['repository']
+                        repo = request['base']['repo']
                     link = u"%s/commit/%s" % (
                         repo['url'],
-                        entry['id'])
+                        entry['sha'])
                     item = Comment(user=get_user(entry),
-                                   body=entry['message'],
+                                   body=entry['commit']['message'],
                                    timestamp=max(request_timestamp_delta,
-                                                 parse_time(entry['committed_date'])),
-                                   commit=entry['id'],
+                                                 parse_time(entry['commit']['committer']['date'])),
+                                   commit=entry['sha'],
                                    link=link,
                                    request_number=request['number'],
                                    request_title=request['title'],
                                    )
                     items.append(item)
-                elif entry['type'].lower() == 'issuecomment':
+                elif entry['type'].lower() == 'comment':
                     item = Comment(user=get_user(entry),
                                    body=entry['body'],
                                    timestamp=max(request_timestamp_delta,
@@ -426,11 +440,10 @@ class GithubPulls(object):
                                    request_title=request['title'],
                                    )
                     items.append(item)
-                elif entry['type'].lower() in ('pullrequestreviewcomment',
-                                               'commitcomment'):
-                    repo = request['head']['repository']
+                elif entry['type'].lower() in 'review_comment':
+                    repo = request['head']['repo']
                     if repo is None:
-                        repo = request['base']['repository']
+                        repo = request['base']['repo']
                     if 'position' in entry:
                         link = u"%s/commit/%s#%s-P%s" % (
                             repo['url'],
