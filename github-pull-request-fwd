@@ -391,7 +391,7 @@ class GithubPulls(object):
                 print >> sys.stderr, "Fail: %s, retry in %d sec" % (err, w)
                 time.sleep(w)
         else:
-            raise RuntimeError("Fetching request failed: %s" % last_err)
+            raise IOError("Fetching request failed: %s" % last_err)
 
         try:
             return json.load(f)
