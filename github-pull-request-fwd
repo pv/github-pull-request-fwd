@@ -126,6 +126,8 @@ def main():
             except IOError:
                 # Should still be in a consistent state
                 data.save_cache()
+            else:
+                data.save_cache()
 
         base_url = URL_BASE % (user, project)
         link = base_url + "pulls"
@@ -348,7 +350,7 @@ class GithubPulls(object):
                 req = dict(self._requests[number])
                 self._fetch_request(number, req)
                 request.update(req)
-                request['_need_update'] = 0
+            request['_need_update'] = 0
 
     def _fetch_request(self, number, request):
         commits_url = API_URL_BASE + "repos/%s/%s/pulls/%d/commits" % (
