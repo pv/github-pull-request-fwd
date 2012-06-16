@@ -434,7 +434,7 @@ class GithubPulls(object):
                     if repo is None:
                         repo = request['base']['repo']
                     link = u"%s/commit/%s" % (
-                        repo['url'],
+                        repo['html_url'],
                         entry['sha'])
                     item = Comment(user=get_user(entry),
                                    body=entry['commit']['message'],
@@ -461,13 +461,13 @@ class GithubPulls(object):
                         repo = request['base']['repo']
                     if 'position' in entry:
                         link = u"%s/commit/%s#%s-P%s" % (
-                            repo['url'],
+                            repo['html_url'],
                             entry['commit_id'],
                             entry['path'],
                             entry['position'])
                     else:
                         link = u"%s/commit/%s#%s" % (
-                            repo['url'],
+                            repo['html_url'],
                             entry['commit_id'],
                             entry['path'])
                     item = Comment(user=get_user(entry),
